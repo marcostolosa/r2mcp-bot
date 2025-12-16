@@ -25,6 +25,7 @@ async def run_r2agent(
     agent_prompt_path: Optional[Path],
     tag: str,
     log_path: Path,
+    llm_model: Optional[str] = None,
 ) -> RunResult:
     script_path = (project_root / "scripts" / "run_r2agent.sh").resolve()
     if not script_path.exists():
@@ -38,6 +39,13 @@ async def run_r2agent(
         if agent_prompt_path is None:
             args.append("")
         args.append(tag)
+    if llm_model:
+        # Maintain positional args: if no tag is passed, we still need an empty 3rd arg.
+        if not tag:
+            if agent_prompt_path is None:
+                args.append("")
+            args.append("")
+        args.append(llm_model)
 
     log_path.parent.mkdir(parents=True, exist_ok=True)
 

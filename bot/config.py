@@ -44,8 +44,8 @@ def load_config(config_path: Path) -> BotConfig:
         concurrency=concurrency,
         project_root=project_root,
         default_agent=resolve_path(data.get("default_agent", "../agents/analyze.task.md")),
-        jobs_root=resolve_path(data.get("jobs_root", "../analisis")),
-        uploads_dir=resolve_path(data.get("uploads_dir", "../analisis/_uploads")),
+        jobs_root=resolve_path(data.get("jobs_root", "../analysis")),
+        uploads_dir=resolve_path(data.get("uploads_dir", "../analysis/_uploads")),
     )
 
 

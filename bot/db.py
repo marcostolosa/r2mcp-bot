@@ -19,7 +19,7 @@ class JobRow:
     duration_s: Optional[int]
     runner_job_id: Optional[str]
     runner_job_dir: Optional[str]
-    zip_path: Optional[str]
+    zip_path: Optional[str]  # Legacy name: now used to store the main delivered artifact path (e.g. Report.md).
     error: Optional[str]
 
 
@@ -55,10 +55,18 @@ def init_schema(conn: sqlite3.Connection) -> None:
         """
         CREATE TABLE IF NOT EXISTS user_prefs (
             user_id INTEGER PRIMARY KEY,
-            agent TEXT NOT NULL
+            agent TEXT NOT NULL,
+            llm_model TEXT NOT NULL DEFAULT 'opencode/grok-code'
         )
         """
     )
+    # Lightweight migration: older DBs may not have llm_model yet.
+    cols = {row[1] for row in conn.execute("PRAGMA table_info(user_prefs)").fetchall()}
+    if "llm_model" not in cols:
+        # Adding a NOT NULL column requires a DEFAULT in SQLite.
+        conn.execute(
+            "ALTER TABLE user_prefs ADD COLUMN llm_model TEXT NOT NULL DEFAULT 'opencode/grok-code'"
+        )
     conn.commit()
 
 
@@ -73,6 +81,26 @@ def set_user_agent(conn: sqlite3.Connection, user_id: int, agent: str) -> None:
 
 def get_user_agent(conn: sqlite3.Connection, user_id: int) -> Optional[str]:
     cur = conn.execute("SELECT agent FROM user_prefs WHERE user_id = ?", (user_id,))
+    row = cur.fetchone()
+    return str(row[0]) if row else None
+
+
+def set_user_llm_model(
+    conn: sqlite3.Connection, user_id: int, llm_model: str, *, default_agent: str
+) -> None:
+    # Ensure the row exists (agent is NOT NULL).
+    conn.execute(
+        "INSERT INTO user_prefs(user_id, agent, llm_model) VALUES (?, ?, ?) "
+        "ON CONFLICT(user_id) DO UPDATE SET llm_model=excluded.llm_model",
+        (user_id, default_agent, llm_model),
+    )
+    conn.commit()
+
+
+def get_user_llm_model(conn: sqlite3.Connection, user_id: int) -> Optional[str]:
+    cur = conn.execute(
+        "SELECT llm_model FROM user_prefs WHERE user_id = ?", (user_id,)
+    )
     row = cur.fetchone()
     return str(row[0]) if row else None
 

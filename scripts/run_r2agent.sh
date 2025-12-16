@@ -1,17 +1,17 @@
 #!/usr/bin/env bash
-# Run r2agent container against a binary and store reports under ./analisis/<job_id>/
-# Usage: ./scripts/run_r2agent.sh /path/to/binary [optional_task_md] [optional_tag]
+# Run r2agent container against a binary and store reports under ./analysis/<job_id>/
+# Usage: ./scripts/run_r2agent.sh /path/to/binary [optional_task_md] [optional_tag] [optional_llm_model]
 #
 # Outputs per job:
-#   ./analisis/<job_id>/input.bin
-#   ./analisis/<job_id>/prompt_agent.md (if provided)
-#   ./analisis/<job_id>/report.md
-#   ./analisis/<job_id>/opencode.log
-#   ./analisis/<job_id>/docker.log
-#   ./analisis/<job_id>/meta.json
-#   ./analisis/<job_id>/FINISHED_<seconds>
+#   ./analysis/<job_id>/input.bin
+#   ./analysis/<job_id>/prompt_agent.md (if provided)
+#   ./analysis/<job_id>/Report.md
+#   ./analysis/<job_id>/opencode.log
+#   ./analysis/<job_id>/docker.log
+#   ./analysis/<job_id>/meta.json
+#   ./analysis/<job_id>/FINISHED_<seconds>
 # Global index:
-#   ./analisis/reports.md
+#   ./analysis/reports.md
 
 set -euo pipefail
 
@@ -23,9 +23,7 @@ START_EPOCH="$(date +%s)"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 
-# Always mark job completion and remove the copied binary from the job workspace.
-# This helps you see when a job is finished and how long it took, without keeping
-# potentially large / sensitive binaries on disk.
+# Always mark job completion so it's easy to see when a job is finished and how long it took.
 on_exit() {
   local rc=$?
   set +e
@@ -36,7 +34,6 @@ on_exit() {
 
   if [[ -n "${JOB_DIR:-}" && -d "${JOB_DIR}" ]]; then
     : > "${JOB_DIR}/FINISHED_${duration}"
-    rm -f "${JOB_DIR}/input.bin" >/dev/null 2>&1
   fi
 
   # Best-effort: avoid leaving a stale reports lock behind on abort.
@@ -48,13 +45,14 @@ on_exit() {
 trap on_exit EXIT
 
 if [[ $# -lt 1 ]]; then
-  echo "Usage: $0 /path/to/binary [optional_task_md] [optional_tag]"
+  echo "Usage: $0 /path/to/binary [optional_task_md] [optional_tag] [optional_llm_model]"
   exit 1
 fi
 
 BIN_PATH="$1"
 TASK_PATH="${2:-}"
 TAG="${3:-}"
+LLM_MODEL="${4:-}"
 
 if [[ ! -f "$BIN_PATH" ]]; then
   echo "[!] Binary not found: $BIN_PATH"
@@ -66,7 +64,7 @@ if [[ -n "$TASK_PATH" && ! -f "$TASK_PATH" ]]; then
   exit 1
 fi
 
-BASE_DIR="${PROJECT_ROOT}/analisis"
+BASE_DIR="${PROJECT_ROOT}/analysis"
 INDEX_FILE="${BASE_DIR}/reports.md"
 mkdir -p "$BASE_DIR"
 
@@ -121,13 +119,18 @@ fi
 
 docker run --rm -i "${DOCKER_TTY[@]}" --platform "$PLATFORM" \
   -v "$JOB_DIR:/workspace" \
+  ${LLM_MODEL:+-e OPENCODE_MODEL="${LLM_MODEL}"} \
+  --name "r2agent_${JOB_ID}" \
+  --label "r2agent.managed=1" \
+  --label "r2agent.job_id=${JOB_ID}" \
+  --label "r2agent.tag=${TAG}" \
   "${AUTH_MOUNT[@]}" \
   --entrypoint bash \
   "$IMAGE" -lc "/usr/local/bin/run_analysis.sh" 2>&1 | tee "$JOB_DIR/docker.log"
 
 # Results
-if [[ ! -f "$JOB_DIR/report.md" ]]; then
-  echo "[!] No report.md found."
+if [[ ! -f "$JOB_DIR/Report.md" && ! -f "$JOB_DIR/report.md" ]]; then
+  echo "[!] No Report.md found."
   echo "    Check: $JOB_DIR/opencode.log"
   echo "    Check: $JOB_DIR/docker.log"
   exit 2
@@ -174,16 +177,20 @@ if [[ ! -f "$INDEX_FILE" ]]; then
   } > "$INDEX_FILE"
 fi
 
-echo "- **${JOB_ID}** | ${BIN_NAME} | ${BIN_SIZE} bytes | tag: ${TAG:-none} | report: \`analisis/${JOB_ID}/report.md\` | opencode: \`analisis/${JOB_ID}/opencode.log\` | docker: \`analisis/${JOB_ID}/docker.log\`" >> "$INDEX_FILE"
+echo "- **${JOB_ID}** | ${BIN_NAME} | ${BIN_SIZE} bytes | tag: ${TAG:-none} | report: \`analysis/${JOB_ID}/Report.md\` | opencode: \`analysis/${JOB_ID}/opencode.log\` | docker: \`analysis/${JOB_ID}/docker.log\`" >> "$INDEX_FILE"
 release_reports_lock
 
-echo "[+] Report:  $JOB_DIR/report.md"
+if [[ -f "$JOB_DIR/Report.md" ]]; then
+  echo "[+] Report:  $JOB_DIR/Report.md"
+else
+  echo "[+] Report:  $JOB_DIR/report.md"
+fi
 echo "[+] OpenCode: $JOB_DIR/opencode.log"
 echo "[+] Docker:   $JOB_DIR/docker.log"
 echo "[+] Index:   $INDEX_FILE"
 
 echo
 echo "----- report.md (head) -----"
-sed -n '1,120p' "$JOB_DIR/report.md"
+sed -n '1,120p' "$JOB_DIR/Report.md" 2>/dev/null || sed -n '1,120p' "$JOB_DIR/report.md"
 
 

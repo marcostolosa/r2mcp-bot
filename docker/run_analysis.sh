@@ -11,7 +11,7 @@ WORKDIR="/workspace"
 TEMPLATE_TASK="/opt/prompt_agent.md"
 TASK_FILE="${WORKDIR}/prompt_agent.md"
 BIN_FILE="${WORKDIR}/input.bin"
-REPORT_FILE="${WORKDIR}/report.md"
+REPORT_FILE="${WORKDIR}/Report.md"
 LOG_FILE="${WORKDIR}/opencode.log"
 
 cd "${WORKDIR}"
@@ -25,7 +25,9 @@ cd "${WORKDIR}"
 # like "workspace -> /workspace" because they become broken on the host and can
 # break post-processing (e.g., zipping job artifacts).
 mkdir -p "${WORKDIR}/workspace"
-ln -sf ../report.md "${WORKDIR}/workspace/report.md"
+ln -sf ../Report.md "${WORKDIR}/workspace/report.md"
+# Compatibility for older tooling expecting /workspace/report.md
+ln -sf "${REPORT_FILE##*/}" "${WORKDIR}/report.md"
 
 if [[ ! -f "${TASK_FILE}" ]]; then
   echo "[i] No prompt_agent.md found in ${WORKDIR}, copying template..."
@@ -56,6 +58,9 @@ rm -f "${REPORT_FILE}" "${LOG_FILE}"
 
 echo "[+] Running OpenCode, logging to ${LOG_FILE} ..."
 
+OPENCODE_MODEL="${OPENCODE_MODEL:-opencode/grok-code}"
+echo "[i] OpenCode model: ${OPENCODE_MODEL}"
+
 set +e
 # Some OpenCode versions may buffer or suppress streaming output when stdout is not a TTY.
 # When the container is launched from scripts (docker stdout is piped), that can make
@@ -66,14 +71,14 @@ set +e
 if command -v script >/dev/null 2>&1; then
   # Use Python to pass the prompt content as a single argv element (no shell-quoting edge cases),
   # while `script` provides a PTY to encourage streaming output.
-  script -q -e -c "python3 -c 'import pathlib,subprocess; subprocess.run([\"opencode\",\"run\",pathlib.Path(\"${TASK_FILE}\").read_text(encoding=\"utf-8\")])'" "${LOG_FILE}"
+  script -q -e -c "python3 -c 'import os,pathlib,subprocess; model=os.environ.get(\"OPENCODE_MODEL\",\"opencode/grok-code\"); subprocess.run([\"opencode\",\"-m\",model,\"run\",pathlib.Path(\"${TASK_FILE}\").read_text(encoding=\"utf-8\")])'" "${LOG_FILE}"
   OC_RC=$?
 else
   # Fallback: best-effort line-buffering + tee
   if command -v stdbuf >/dev/null 2>&1; then
-    stdbuf -oL -eL opencode -m "opencode/grok-code" run "${TASK_CONTENT}" 2>&1 | tee "${LOG_FILE}"
+    stdbuf -oL -eL opencode -m "${OPENCODE_MODEL}" run "${TASK_CONTENT}" 2>&1 | tee "${LOG_FILE}"
   else
-    opencode -m "opencode/grok-code" run "${TASK_CONTENT}" 2>&1 | tee "${LOG_FILE}"
+    opencode -m "${OPENCODE_MODEL}" run "${TASK_CONTENT}" 2>&1 | tee "${LOG_FILE}"
   fi
   OC_RC=${PIPESTATUS[0]}
 fi

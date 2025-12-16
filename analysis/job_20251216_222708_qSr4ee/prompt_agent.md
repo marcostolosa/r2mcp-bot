@@ -20,108 +20,36 @@ Deliverable:
 
 ## Objective (minimum)
 
-1) Analyze for security: entrypoint, params, help, arg parsing vulns, servers, file/system calls.
-2) Report: commands timeline, ID, entry/main, decompiles, security insights.
-
-## Decompilation Flow
-
-Given a binary or/and a target function (name or address), produce:
-
-1. **RAW** decompilation output: exactly what r2ghidra prints, unmodified
-2. **CLEAN** decompilation: same logic, but made readable with renames and comments
-
-### Inputs
-
-- Binary path: `<BIN_PATH>`
-- Function identifier:
-  - Name: `<FUNC_NAME>` or
-  - Address: `<FUNC_ADDR>` (hex)
-- Optional context: `<CONTEXT>`
-
-### Required workflow
-
-1. Open the binary in radare2 and run analysis:
-   - Run `aaa` (or equivalent full analysis).
-2. Locate the function:
-   - If `<FUNC_ADDR>` is provided, seek to it: `s <FUNC_ADDR>`
-   - If `<FUNC_NAME>` is provided, search or jump to it, for example:
-     - `afl~<FUNC_NAME>` to find it, then `s <addr>` or `s <flag>`
-3. Ensure the current seek is inside the target function:
-   - Run `af` to (re)analyze the current function if needed.
-4. Extract the RAW decompile:
-   - Run `pdg` and capture the output as the RAW block.
-   - Do not alter spacing, names, or formatting.
-5. Generate the CLEAN version:
-   - Use the RAW as the only source of truth for control flow and expressions.
-   - Keep behavior identical, do not fix bugs or remove checks.
-6. Provide a rename map and quick notes.
-
-### Output format (strict)
-
-#### Function: <resolved name and address>
-
-#### RAW decompile (exact r2ghidra output)
-```c
-<PASTE EXACT OUTPUT OF `pdg` HERE, NO EDITS>
-```
-
-#### CLEAN decompile (refactored for readability, same logic)
-Rules:
-
-- Rename variables like `var1`, `iVar2`, `uVar3`, `param_1` to meaningful names.
-- Rename helper functions if you can infer intent, otherwise keep the original name or use `unk_*`.
-- Add short comments for:
-  - input validation and bounds checks
-  - parsing, serialization, crypto, IO
-  - error handling paths and return codes
-  - state machine transitions
-- Use consistent naming:
-  - pointers: `ptr_*`
-  - lengths: `*_len`
-  - counts: `*_count`
-  - status: `status`, `rc`, `err`
-- If you cannot infer meaning, use `unk_*` and add a comment explaining what is known.
-
-```c
-<PASTE CLEAN VERSION HERE>
-```
-
-#### Renaming map
-Provide a list of renames with one line of justification for each important rename.
-
-Example:
-
-- `param_1 -> ctx` (passed through multiple calls as a shared context pointer)
-- `iVar2 -> packet_len` (used in comparisons and as a memcpy length)
-
-#### Notes
-3 to 8 bullets:
-
-- High level purpose of the function
-- Inputs, outputs, and side effects
-- Key branches or error codes
-- Potential security issues if they are obvious from the code
-
+1) Force Ghidra decompiler (pdg) if available, decompile main.
+2) Analyze for security: entrypoint, params, help, arg parsing vulns, servers, file/system calls.
+3) Report: commands timeline, ID, entry/main, decompiles, security insights.
 
 ## Step-by-step plan
 
 ### 0) Setup and analysis
 
-1) Open de target binary using `radare2_open_file` with the absolute file path `{"file_path":"/workspace/input.bin"}`
-2) Set `radare2_use_decompiler` to `pdg` the Ghidra decompiler (pdg)
-3) Execute `radare2_analyze` {"level":4}
-4) Decompile main function
+- open_file {"file_path":"/workspace/input.bin"}
+- analyze {"level":3}  // Deep analysis, equivalent to aaa
 
 Record any errors.
 
-### 1) Basic identification
+### 1) Verify Ghidra decompiler
+
+- list_decompilers {}  // Check if ghidra/pdg available
+- If "ghidra" or "pdg" in list: use_decompiler {"name":"pdg"} or {"name":"ghidra"}
+- Fallback verify: run_command {"command":"pdg?"}
+  - If help/usage: pdg available.
+  - Else: run_command {"command":"pdc?"} for fallback, or disassemble_function as last resort.
+Record availability.
+
+### 2) Basic identification
 
 - show_headers {}  // Headers, arch, format
 - list_sections {}  // Sections
 - list_symbols {}  // Symbols, check stripped (few symbols?)
 - list_entrypoints {}  // Entry points, main if present
 
-### 2) Libraries, imports, strings (security focus)
+### 3) Libraries, imports, strings (security focus)
 
 - list_libraries {}  // Linked libs (e.g., libcurl for network?)
 - list_imports {}  // Imports (search for socket, bind, listen, fopen, system, execve, scanf, strcpy – potential vulns)
@@ -130,7 +58,7 @@ Record any errors.
 
 Highlight security-relevant: potential help (-h), unsafe funcs (strcpy → BOF), network (socket → server?), files/system.
 
-### 3) Find entrypoint and main
+### 4) Find entrypoint and main
 
 - list_entrypoints {}  // Get entry0, main if sym.main
 - If main not in symbols: list_functions {} and filter for "main"
@@ -142,7 +70,8 @@ Record address and method.
 
 Analyze params: In main decompile, check for argc/argv (int main(int, char**)), getopt loops.
 
-### 4) Decompile main (Ghidra priority, security lens)
+### 5) Decompile main (Ghidra priority, security lens)
+
 
 - Seek to main if not already: run_command {"command":"s sym.main"}
 - Raw decompile:
@@ -158,7 +87,7 @@ Cleaned decompile:
 - Format manually: indent, comments on security (e.g., // Potential BOF: unsafe strcpy, // Parses args with getopt – check for overflow, // Opens file without checks, // Calls system() with user input?).
 - Look for: Arg parsing loops (getopt/strcmp – BOF if no bounds), help menu (if "-h" string xref to printf), server (socket/bind/listen sequences), file ops (fopen xrefs), system calls (system/execve with tainted input).
 
-### 5) Security hardening and behavior
+### 6) Security hardening and behavior
 
 - run_command {"command":"i~pie,nx,relro,canary,stripped"}  // PIE, NX, RELRO, Canary (__stack_chk_fail import?), stripped
 - Vulns inference:
@@ -169,32 +98,22 @@ Cleaned decompile:
   - Help menu: xrefs_to "-h" strings – decompile that path.
 Summarize: PIE/NX/RELRO/Canary presence, potential vulns (BOF in parsing, etc.).
 
-### 6) Write the report
-
+### 7) Write the report
 Write `report.md` with:
 
----
 # Binary Analysis Report
-
-## 1. Identification (format, arch, symbols, stripped?)
-
-## 2. Entry points and main (address, discovery method, params/argc/argv)
-
-## 3. Libraries and imports (security-relevant: unsafe funcs, network, files, system)
-
-## 4. Strings highlights (help menu, secrets, network indicators)
-
-## 5. Decompilation of main
-
-## 6. Security hardening (PIE/NX/RELRO/Canary)
-
-## 7. Potential vulnerabilities (arg parsing BOF/SOF, server setup, file ops, system calls – evidence-based)
-
-## 8. High-level behavior (inferred: accepts params? Help menu? Starts server? Sends data? Opens files? Calls binaries?)
-
-## 9. Next steps (static: more decompiles, xrefs on suspects)
-
----
+## 1. Timeline of MCP calls (with key outputs/snippets)
+## 2. Identification (format, arch, symbols, stripped?)
+## 3. Entry points and main (address, discovery method, params/argc/argv)
+## 4. Libraries and imports (security-relevant: unsafe funcs, network, files, system)
+## 5. Strings highlights (help menu, secrets, network indicators)
+## 6. Decompilation of main
+### 6.1 Raw decompile
+### 6.2 Cleaned decompile (renamed, formatted, security comments)
+## 7. Security hardening (PIE/NX/RELRO/Canary)
+## 8. Potential vulnerabilities (arg parsing BOF/SOF, server setup, file ops, system calls – evidence-based)
+## 9. High-level behavior (inferred: accepts params? Help menu? Starts server? Sends data? Opens files? Calls binaries?)
+## 10. Next steps (static: more decompiles, xrefs on suspects)
 
 - close_file {}  // Cleanup
 

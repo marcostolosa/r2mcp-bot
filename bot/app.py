@@ -32,15 +32,24 @@ from bot.db import (
     connect,
     create_job,
     get_user_agent,
+    get_user_llm_model,
     init_schema,
     list_jobs_for_user,
     mark_failed,
     mark_finished,
     mark_running,
     set_user_agent,
+    set_user_llm_model,
 )
 from bot.runner_local import run_r2agent
-from bot.zip_utils import zip_dir
+
+
+FREE_LLM_MODELS = (
+    "opencode/gpt-5-nano",
+    "opencode/big-pickle",
+    "opencode/grok-code",
+)
+DEFAULT_LLM_MODEL = "opencode/grok-code"
 
 
 @dataclass(frozen=True)
@@ -71,10 +80,12 @@ def require_allowed(allowlist: Allowlist):
 
 async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     await update.message.reply_text(
-        "Send me a binary as a document and I'll analyze it. Commands:\n"
+        "🤖 Send me a binary as a document and I'll analyze it.\n\n"
+        "Commands:\n"
         "/agents - list available agent prompts\n"
-        "/read <agent_filename> - print agent prompt contents\n"
+        "/read <agent_filename> - send the agent prompt file\n"
         "/use <agent_filename> - select agent prompt\n"
+        "/llm - list/select the OpenCode model\n"
         "/status - show your recent jobs\n"
     )
 
@@ -114,13 +125,14 @@ async def cmd_read(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         await update.message.reply_text(f"Agent not found: {agent_name}")
         return
 
-    content = agent_path.read_text(encoding="utf-8", errors="replace")
-    payload = f"Agent: {agent_path.name}\n\n{content}"
-
-    # Telegram message limit is ~4096 chars; send in chunks.
-    chunk_size = 3800
-    for i in range(0, len(payload), chunk_size):
-        await update.message.reply_text(payload[i : i + chunk_size])
+    if update.message is None:
+        return
+    with agent_path.open("rb") as f:
+        await update.message.reply_document(
+            document=f,
+            filename=agent_path.name,
+            caption=f"📄 {agent_path.name}",
+        )
 
 
 async def cmd_use(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -130,18 +142,127 @@ async def cmd_use(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if user is None:
         return
 
-    if not context.args:
-        await update.message.reply_text("Usage: /use <agent_filename>")
+    agents_dir = (cfg.project_root / "agents").resolve()
+    if not agents_dir.exists():
+        await update.message.reply_text("❌ No agents directory found.")
         return
 
-    agent_name = context.args[0].strip()
-    agent_path = (cfg.project_root / "agents" / agent_name).resolve()
-    if not agent_path.exists():
-        await update.message.reply_text(f"Agent not found: {agent_name}")
+    files = sorted([p.name for p in agents_dir.iterdir() if p.is_file()])
+    if not files:
+        await update.message.reply_text("❌ No agent prompts found.")
+        return
+
+    current_pref = get_user_agent(conn, user.id)
+    current_path = Path(current_pref).resolve() if current_pref else cfg.default_agent
+    current_name = current_path.name
+
+    def normalize_agent(raw: str) -> Optional[str]:
+        s = (raw or "").strip()
+        if not s:
+            return None
+        if s.isdigit():
+            i = int(s)
+            if 1 <= i <= len(files):
+                return files[i - 1]
+            return None
+        if s in files:
+            return s
+        return None
+
+    if not context.args:
+        lines = [
+            f"📄 Current agent: {current_name}",
+            "",
+            "Available agents:",
+        ]
+        for idx, name in enumerate(files, start=1):
+            agent_path = (agents_dir / name).resolve()
+            is_default = agent_path == cfg.default_agent.resolve()
+            mark_default = " ⭐" if is_default else ""
+            here = " (selected)" if name == current_name else ""
+            lines.append(f"{idx}. {name}{mark_default}{here}")
+        lines += [
+            "",
+            "Set it with:",
+            "/use 1  (or /use crackme.task.md)",
+        ]
+        await update.message.reply_text("\n".join(lines))
+        return
+
+    chosen_name = normalize_agent(context.args[0])
+    if chosen_name is None:
+        await update.message.reply_text("❌ Invalid agent. Use /use to see available agents.")
+        return
+
+    agent_path = (agents_dir / chosen_name).resolve()
+    # Prevent path traversal: resolved file must be inside agents/.
+    try:
+        agent_path.relative_to(agents_dir)
+    except Exception:
+        await update.message.reply_text("❌ Invalid agent path.")
+        return
+    if not agent_path.exists() or not agent_path.is_file():
+        await update.message.reply_text(f"❌ Agent not found: {chosen_name}")
         return
 
     set_user_agent(conn, user.id, str(agent_path))
-    await update.message.reply_text(f"Selected agent: {agent_name}")
+    await update.message.reply_text(f"✅ Selected agent: {chosen_name}")
+
+
+def _normalize_llm_model(raw: str) -> Optional[str]:
+    s = (raw or "").strip()
+    if not s:
+        return None
+    if s.isdigit():
+        i = int(s)
+        if 1 <= i <= len(FREE_LLM_MODELS):
+            return FREE_LLM_MODELS[i - 1]
+        return None
+    if s in FREE_LLM_MODELS:
+        return s
+    # Allow short names like "grok-code" / "big-pickle" / "gpt-5-nano".
+    for m in FREE_LLM_MODELS:
+        if s == m.split("/", 1)[-1]:
+            return m
+    return None
+
+
+async def cmd_llm(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    cfg: BotConfig = context.application.bot_data["cfg"]
+    conn = context.application.bot_data["db"]
+    user = update.effective_user
+    if user is None:
+        return
+
+    current = get_user_llm_model(conn, user.id) or DEFAULT_LLM_MODEL
+
+    if not context.args:
+        lines = [
+            f"🧠 Current model: {current}",
+            "",
+            "Free models:",
+        ]
+        for idx, m in enumerate(FREE_LLM_MODELS, start=1):
+            mark = " ⭐" if m == DEFAULT_LLM_MODEL else ""
+            here = " (selected)" if m == current else ""
+            lines.append(f"{idx}. {m}{mark}{here}")
+        lines += [
+            "",
+            "Set it with:",
+            "/llm 1  (or /llm opencode/gpt-5-nano)",
+        ]
+        await update.message.reply_text("\n".join(lines))
+        return
+
+    chosen = _normalize_llm_model(context.args[0])
+    if chosen is None:
+        await update.message.reply_text(
+            "❌ Invalid model. Use /llm to see the available free models."
+        )
+        return
+
+    set_user_llm_model(conn, user.id, chosen, default_agent=str(cfg.default_agent))
+    await update.message.reply_text(f"✅ Model set to: {chosen}")
 
 
 async def cmd_status(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -151,13 +272,16 @@ async def cmd_status(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
         return
     jobs = list_jobs_for_user(conn, user.id, limit=10)
     if not jobs:
-        await update.message.reply_text("No jobs yet.")
+        await update.message.reply_text("🗂️ No jobs yet.")
         return
     lines = []
+    icon = {"queued": "⏳", "running": "🟡", "finished": "✅", "failed": "❌"}
     for j in jobs:
         dur = f"{j.duration_s}s" if j.duration_s is not None else "-"
-        lines.append(f"{j.job_id} | {j.status} | {dur} | {Path(j.agent).name}")
-    await update.message.reply_text("Recent jobs:\n" + "\n".join(lines))
+        lines.append(
+            f"{icon.get(j.status, '•')} {j.job_id} | {j.status} | {dur} | {Path(j.agent).name}"
+        )
+    await update.message.reply_text("📌 Recent jobs:\n" + "\n".join(lines))
 
 
 async def handle_document(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -177,13 +301,13 @@ async def handle_document(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     safe_name = original_name.replace("/", "_")
     dest = cfg.uploads_dir / f"{int(time.time())}_{user.id}_{safe_name}"
 
-    await msg.reply_text("Received. Downloading...")
+    await msg.reply_text("📥 Received! Downloading...")
     await context.bot.send_chat_action(chat_id=msg.chat_id, action=ChatAction.TYPING)
 
     tg_file = await context.bot.get_file(file_id)
     await tg_file.download_to_drive(custom_path=str(dest))
 
-    await msg.reply_text("Queued for analysis.")
+    await msg.reply_text("⏳ Queued for analysis.")
     await queue.put(
         JobRequest(
             user_id=user.id,
@@ -206,6 +330,7 @@ async def worker_loop(app: Application) -> None:
 
         agent_pref = get_user_agent(conn, req.user_id)
         agent_path = Path(agent_pref).resolve() if agent_pref else cfg.default_agent
+        llm_model = get_user_llm_model(conn, req.user_id) or DEFAULT_LLM_MODEL
 
         create_job(
             conn,
@@ -221,21 +346,25 @@ async def worker_loop(app: Application) -> None:
         try:
             # Run analysis
             runner_log = cfg.jobs_root / "_bot_runner_logs" / f"{job_id}.log"
+            await app.bot.send_message(
+                chat_id=req.chat_id,
+                text=f"🚀 Started: {job_id}\n🧠 Model: {llm_model}\n📄 Agent: {agent_path.name}",
+            )
             result = await run_r2agent(
                 project_root=cfg.project_root,
                 binary_path=req.file_path,
                 agent_prompt_path=agent_path,
                 tag=req.original_name,
                 log_path=runner_log,
+                llm_model=llm_model,
             )
-
-            # Zip output (exclude input.bin just in case)
-            zip_path = result.job_dir / "result.zip"
-            zip_dir(
-                src_dir=result.job_dir,
-                dest_zip=zip_path,
-                exclude_names=("input.bin",),
-            )
+            report_path = result.job_dir / "Report.md"
+            if not report_path.exists():
+                alt = result.job_dir / "report.md"
+                if alt.exists():
+                    report_path = alt
+                else:
+                    raise FileNotFoundError(f"Missing report file in job dir: {result.job_dir}")
 
             duration_s = int(time.time() - started)
             mark_finished(
@@ -245,17 +374,17 @@ async def worker_loop(app: Application) -> None:
                 duration_s=duration_s,
                 runner_job_id=result.job_id,
                 runner_job_dir=str(result.job_dir),
-                zip_path=str(zip_path),
+                zip_path=str(report_path),
             )
 
             await app.bot.send_message(
                 chat_id=req.chat_id,
-                text=f"Finished: {result.job_id} ({duration_s}s). Uploading results...",
+                text=f"✅ Finished: {result.job_id} ({duration_s}s). Uploading Report.md...",
             )
             await app.bot.send_document(
                 chat_id=req.chat_id,
-                document=zip_path.open("rb"),
-                filename=f"{result.job_id}.zip",
+                document=report_path.open("rb"),
+                filename="Report.md",
             )
         except Exception as e:
             duration_s = int(time.time() - started)
@@ -269,14 +398,9 @@ async def worker_loop(app: Application) -> None:
                 error=str(e),
             )
             await app.bot.send_message(
-                chat_id=req.chat_id, text=f"Job failed after {duration_s}s: {e}"
+                chat_id=req.chat_id, text=f"❌ Job failed after {duration_s}s: {e}"
             )
         finally:
-            # Best-effort cleanup of upload
-            try:
-                req.file_path.unlink(missing_ok=True)
-            except Exception:
-                pass
             queue.task_done()
 
 
@@ -307,6 +431,7 @@ def build_app() -> Application:
     app.add_handler(CommandHandler("agents", wrap(cmd_agents)))
     app.add_handler(CommandHandler("read", wrap(cmd_read)))
     app.add_handler(CommandHandler("use", wrap(cmd_use)))
+    app.add_handler(CommandHandler("llm", wrap(cmd_llm)))
     app.add_handler(CommandHandler("status", wrap(cmd_status)))
     app.add_handler(MessageHandler(filters.Document.ALL, wrap(handle_document)))
 

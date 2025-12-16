@@ -1,0 +1,33 @@
+[+] input.bin detected, starting analysis...
+[i] OpenCode config: /home/op/.config/opencode/opencode.json
+radare2 6.0.7 1 @ linux-arm-64
+birth: git.6.0.7 2025-12-15__09:18:03
+commit: dca8fb249c0d33ac4f0fdf280ecc0cdffbe19e79
+options: gpl -O? cs:5 cl:2 make
+r2pm 6.0.7 1 @ linux-arm-64
+birth: git.6.0.7 2025-12-15__09:18:03
+commit: dca8fb249c0d33ac4f0fdf280ecc0cdffbe19e79
+options: gpl -O? cs:5 cl:2 make
+1.0.153
+[+] Running OpenCode, logging to /workspace/opencode.log ...
+
+
+I'll analyze the binary following the specified workflow. Let me start by opening the target binary and performing initial analysis.
+
+[94m[1m| [0m[90m radare2_open_file  [0m{"file_path":"/workspace/input.bin"}
+[94m[1m| [0m[90m radare2_use_decompiler  [0m{"name":"pdg"}
+
+
+
+[94m[1m| [0m[90m radare2_list_decompilers  [0mUnknown
+
+
+
+[94m[1m| [0m[90m radare2_use_decompiler  [0m{"name":"pdc"}
+
+
+
+
+
+
+[94m[1m| [0m[90m radare2_analyze  [0m{"level":4}

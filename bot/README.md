@@ -29,7 +29,7 @@ python -m bot
 
 ### Notes
 - The bot stores job metadata in `bot/bot.sqlite3`.
-- Uploaded binaries are downloaded to `analisis/_uploads/` and removed after the runner starts.
-- Job outputs are under `analisis/job_*/` and a `result.zip` is created per job.
+- Uploaded binaries are downloaded to `analysis/_uploads/` (and kept on disk).
+- Job outputs are under `analysis/job_*/`. The bot only sends `Report.md` back to the user.
 
 

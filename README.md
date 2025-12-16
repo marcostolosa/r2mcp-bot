@@ -5,7 +5,7 @@ Repo layout:
 - `docker/`: Docker build context (Dockerfile, OpenCode config, container entrypoint)
 - `agents/`: analysis task prompts (e.g., `analyze.task.md`)
 - `scripts/`: host-side helper scripts (e.g., `run_r2agent.sh`)
-- `analisis/`: per-job outputs (created by `scripts/run_r2agent.sh`)
+- `analysis/`: per-job outputs (created by `scripts/run_r2agent.sh`)
 
 This repo builds a Docker image for an Ubuntu 24.04 (arm64 by default on Apple Silicon) container that:
 
@@ -43,7 +43,6 @@ mkdir -p /tmp/r2job
 docker run --rm -it -v /tmp/r2job:/workspace r2agent:dev bash
 ```
 
-
 ## Rebuild Docker container (useful if you make any changes)
 
 ```bash
@@ -58,7 +57,7 @@ Use the helper script (recommended):
 ./scripts/run_r2agent.sh /path/to/binary
 ```
 
-Outputs are written under `./analisis/<job_id>/`.
+Outputs are written under `./analysis/<job_id>/`.
 
 Notes:
 
