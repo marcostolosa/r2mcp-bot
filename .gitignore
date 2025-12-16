@@ -1,0 +1,7 @@
+bot/config.json
+bot/bot.sqlite3
+analisis/_uploads/
+analisis/_bot_runner_logs/
+**/*.zip
+
+

@@ -1,0 +1,12 @@
+{
+  "telegram_bot_token": "pepitoperez"
+  "allowed_users_file": "allowlist.json",
+  "sqlite_path": "bot.sqlite3",
+  "concurrency": 4,
+  "project_root_relative": "..",
+  "default_agent": "../agents/analyze.task.md",
+  "jobs_root": "../analisis",
+  "uploads_dir": "../analisis/_uploads"
+}
+
+
