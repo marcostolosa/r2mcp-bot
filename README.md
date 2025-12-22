@@ -54,12 +54,34 @@ docker build --platform linux/arm64 -t r2agent:dev -f docker/Dockerfile .
 Use the helper script (recommended):
 
 ```bash
+# Basic usage (uses default agent: agents/analyze.task.md)
 ./scripts/run_r2agent.sh /path/to/binary
+
+# With a specific agent prompt
+./scripts/run_r2agent.sh /path/to/binary agents/crackme.task.md
+
+# With a tag (useful for organizing jobs)
+./scripts/run_r2agent.sh /path/to/binary agents/analyze.task.md "my_tag"
+
+# With a specific LLM model
+./scripts/run_r2agent.sh /path/to/binary agents/analyze.task.md "my_tag" opencode/grok-code
+
+# Full example: crackme analysis with custom tag and model
+./scripts/run_r2agent.sh ./crackme.bin agents/crackme.task.md "ctf_challenge_1" opencode/gpt-5-nano
 ```
+
+**Available agents:**
+- `agents/analyze.task.md` - General security analysis focused on finding vulnerabilities (default)
+- `agents/crackme.task.md` - Specialized for CTF challenges and crackmes
+
+**Available LLM models (OpenCode Zen - free tier):**
+- `opencode/grok-code` - Fast and good for most tasks (default)
+- `opencode/big-pickle` - Alternative option with different characteristics
+- `opencode/gpt-5-nano` - Smaller but still capable
 
 Outputs are written under `./analysis/<job_id>/`.
 
-Notes:
+**Notes:**
 
 - The container expects the report at `/workspace/report.md`.
 - If an OpenCode run attempts to write `workspace/report.md` (relative path), the entrypoint script creates a small compatibility symlink so it still lands in `/workspace/report.md`.

@@ -1,7 +1,35 @@
-bot/config.json
-bot/bot.sqlite3
-analisis/_uploads/
-analisis/_bot_runner_logs/
-**/*.zip
+.DS_Store
 
+# Python & virtualenvs
+__pycache__/
+*.pyc
+.venv/
+env/
+venv/
+
+# Local databases and state
+bot/bot.sqlite3*
+
+# Analysis outputs (keep structure via .gitkeep)
+analysis/*
+!analysis/.gitkeep
+!analysis/_bot_runner_logs/
+analysis/_bot_runner_logs/*
+!analysis/_bot_runner_logs/.gitkeep
+!analysis/_uploads/
+analysis/_uploads/*
+!analysis/_uploads/.gitkeep
+!analysis/_watchdog_logs/
+analysis/_watchdog_logs/*
+!analysis/_watchdog_logs/.gitkeep
+
+# Logs and temporary artifacts
+*.log
+*.zip
+*.tmp
+*.swp
+
+# Local configuration files (use .sample files as templates)
+bot/config.json
+bot/allowlist.json
 

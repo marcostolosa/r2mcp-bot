@@ -1,8 +1,0 @@
-EACCES: permission denied, mkdir '/home/op/.local/share/opencode/bin'
-    path: "/home/op/.local/share/opencode/bin",
- syscall: "mkdir",
-   errno: -13,
-    code: "EACCES"
-
-
-Bun v1.3.3 (Linux arm64)

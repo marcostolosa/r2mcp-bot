@@ -1,5 +1,5 @@
 {
-  "telegram_bot_token": "pepitoperez"
+  "telegram_bot_token": "REPLACE_ME",
   "allowed_users_file": "allowlist.json",
   "sqlite_path": "bot.sqlite3",
   "concurrency": 4,

@@ -1,13 +1,19 @@
 ## Telegram bot (local runner)
 
-This bot accepts binaries from an allowlisted set of Telegram user IDs, runs the existing local Docker analysis via `scripts/run_r2agent.sh`, and sends back a zipped job folder when finished.
+This bot accepts binaries from an allowlisted set of Telegram user IDs, runs the existing local Docker analysis via `scripts/run_r2agent.sh`, and sends back the `Report.md` file when finished.
 
 ### Setup
 
-- Edit `bot/config.json`:
-  - `telegram_bot_token`
-  - `concurrency` (default: 4)
-- Edit `bot/allowlist.json` and add Telegram numeric user IDs.
+**Important**: `bot/config.json` and `bot/allowlist.json` are **local-only** files that are ignored by Git. You must create them from the sample files:
+
+```bash
+cp bot/config.sample bot/config.json
+cp bot/allowlist.json.sample bot/allowlist.json
+```
+
+Then edit the files:
+- `bot/config.json`: Set your `telegram_bot_token` and adjust `concurrency` (default: 4) if needed.
+- `bot/allowlist.json`: Add your Telegram numeric user IDs to the `allowed_user_ids` array.
 
 ### Install
 
