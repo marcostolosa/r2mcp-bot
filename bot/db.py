@@ -19,7 +19,6 @@ class JobRow:
     duration_s: Optional[int]
     runner_job_id: Optional[str]
     runner_job_dir: Optional[str]
-    zip_path: Optional[str]  # Legacy name: now used to store the main delivered artifact path (e.g. Report.md).
     error: Optional[str]
 
 
@@ -46,7 +45,6 @@ def init_schema(conn: sqlite3.Connection) -> None:
             duration_s INTEGER,
             runner_job_id TEXT,
             runner_job_dir TEXT,
-            zip_path TEXT,
             error TEXT
         )
         """
@@ -67,6 +65,40 @@ def init_schema(conn: sqlite3.Connection) -> None:
         conn.execute(
             "ALTER TABLE user_prefs ADD COLUMN llm_model TEXT NOT NULL DEFAULT 'opencode/grok-code'"
         )
+    # Migration: remove zip_path column if it exists (legacy field, no longer needed)
+    cols = {row[1] for row in conn.execute("PRAGMA table_info(jobs)").fetchall()}
+    if "zip_path" in cols:
+        # SQLite doesn't support DROP COLUMN directly, so we recreate the table
+        conn.execute("BEGIN TRANSACTION")
+        conn.execute(
+            """
+            CREATE TABLE jobs_new (
+                job_id TEXT PRIMARY KEY,
+                user_id INTEGER NOT NULL,
+                agent TEXT NOT NULL,
+                tag TEXT NOT NULL,
+                status TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                started_at TEXT,
+                finished_at TEXT,
+                duration_s INTEGER,
+                runner_job_id TEXT,
+                runner_job_dir TEXT,
+                error TEXT
+            )
+            """
+        )
+        conn.execute(
+            """
+            INSERT INTO jobs_new 
+            SELECT job_id, user_id, agent, tag, status, created_at, started_at, 
+                   finished_at, duration_s, runner_job_id, runner_job_dir, error
+            FROM jobs
+            """
+        )
+        conn.execute("DROP TABLE jobs")
+        conn.execute("ALTER TABLE jobs_new RENAME TO jobs")
+        conn.execute("COMMIT")
     conn.commit()
 
 
@@ -140,15 +172,14 @@ def mark_finished(
     duration_s: int,
     runner_job_id: str,
     runner_job_dir: str,
-    zip_path: str,
 ) -> None:
     conn.execute(
         """
         UPDATE jobs
-        SET status='finished', finished_at=?, duration_s=?, runner_job_id=?, runner_job_dir=?, zip_path=?
+        SET status='finished', finished_at=?, duration_s=?, runner_job_id=?, runner_job_dir=?
         WHERE job_id=?
         """,
-        (finished_at, duration_s, runner_job_id, runner_job_dir, zip_path, job_id),
+        (finished_at, duration_s, runner_job_id, runner_job_dir, job_id),
     )
     conn.commit()
 
@@ -180,7 +211,7 @@ def list_jobs_for_user(
     cur = conn.execute(
         """
         SELECT job_id, user_id, agent, tag, status, created_at, started_at, finished_at,
-               duration_s, runner_job_id, runner_job_dir, zip_path, error
+               duration_s, runner_job_id, runner_job_dir, error
         FROM jobs
         WHERE user_id=?
         ORDER BY created_at DESC
@@ -203,8 +234,7 @@ def list_jobs_for_user(
                 duration_s=r[8],
                 runner_job_id=r[9],
                 runner_job_dir=r[10],
-                zip_path=r[11],
-                error=r[12],
+                error=r[11],
             )
         )
     return rows

@@ -4,6 +4,16 @@
 # - Ensures an analyze.task.md exists in /workspace (copies template if missing).
 # - Requires /workspace/input.bin
 # - Runs OpenCode and writes /workspace/report.md and /workspace/opencode.log
+#
+# Parameter passing mechanism:
+# - Agent prompt: Received via mounted file at /workspace/prompt_agent.md
+#   The host script (scripts/run_r2agent.sh) copies the agent file into the job directory
+#   before mounting it as /workspace. If no agent is provided, a template is copied from
+#   /opt/prompt_agent.md (see lines 32-35).
+# - LLM model: Received via environment variable OPENCODE_MODEL
+#   The host script sets this variable when launching the Docker container (e.g.,
+#   docker run -e OPENCODE_MODEL="opencode/grok-code" ...). Defaults to "opencode/grok-code"
+#   if not set (see line 61).
 
 set -euo pipefail
 
@@ -58,6 +68,9 @@ rm -f "${REPORT_FILE}" "${LOG_FILE}"
 
 echo "[+] Running OpenCode, logging to ${LOG_FILE} ..."
 
+# LLM model selection: Read from OPENCODE_MODEL environment variable (set by host script).
+# This allows the caller (scripts/run_r2agent.sh or bot) to specify which OpenCode model
+# to use for analysis. Defaults to "opencode/grok-code" if not provided.
 OPENCODE_MODEL="${OPENCODE_MODEL:-opencode/grok-code}"
 echo "[i] OpenCode model: ${OPENCODE_MODEL}"
 

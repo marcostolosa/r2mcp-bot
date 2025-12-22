@@ -374,7 +374,6 @@ async def worker_loop(app: Application) -> None:
                 duration_s=duration_s,
                 runner_job_id=result.job_id,
                 runner_job_dir=str(result.job_dir),
-                zip_path=str(report_path),
             )
 
             await app.bot.send_message(
