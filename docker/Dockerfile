@@ -26,10 +26,8 @@ WORKDIR /workspace
 VOLUME ["/workspace"]
 
 USER op
-ARG R2PM_CORE_PACKAGES="r2mcp r2ghidra decai r2ghidra-sleigh"
-
 RUN r2pm -U
-RUN r2pm -ci r2mcp r2ghidra decai r2ghidra-sleigh
+RUN r2pm -ci r2mcp r2ghidra r2ghidra-sleigh
 
 RUN curl -fsSL https://opencode.ai/install | bash
 
@@ -45,5 +43,3 @@ RUN chmod +x /usr/local/bin/run_analysis.sh \
 
 USER op
 ENTRYPOINT ["/usr/local/bin/run_analysis.sh"]
-
-
