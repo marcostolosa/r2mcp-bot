@@ -1,87 +1,39 @@
 # r2agent (radare2 + r2mcp + OpenCode)
 
-Repo layout:
+With this VibeCode trending the README.md generated are too verboses. If you need more details, check the [README_extended.md](README_extended.md) file.
 
-- `docker/`: Docker build context (Dockerfile, OpenCode config, container entrypoint)
-- `agents/`: analysis task prompts (e.g., `analyze.task.md`)
-- `scripts/`: host-side helper scripts (e.g., `run_r2agent.sh`)
-- `analysis/`: per-job outputs (created by `scripts/run_r2agent.sh`)
+TL;DR:
 
-This repo builds a Docker image for an Ubuntu 24.04 (arm64 by default on Apple Silicon) container that:
+There are five main components:
 
-- Builds and installs radare2 from source (git clone + sys/install.sh)
-- Installs r2pm plugins: r2ghidra, decai, r2ai, r2mcp, r2ghidra-sleigh
-- Installs OpenCode CLI
-- Configures OpenCode MCP to start r2mcp via `r2pm -r r2mcp`
-- Uses /workspace as the shared mount for binaries + tasks + report
+1. `scripts`:
+   - `run_r2agent.sh` run the analysis in your shell.
+   - `watchdog.sh` watches for long-running containers and stops them after a timeout. Useful if you deploy the Tg Bot
 
-## Build (Apple Silicon / arm64)
+2. `agents`: Are the folder promtps. *Prompts are not universal for all the LLMs. You should try different prompts for different LLMs.*
+   - `analyze.task.md` the agent prompt that is used to analyze the binaries.
+   - `crackme.task.md` the agent prompt that is used to analyze the crackme binaries.
 
-From the repo root:
+3. `docker`: The Docker image that contains the required tools.
 
-```bash
-docker build -t r2agent:dev -f docker/Dockerfile .
-```
+4. `analysis`: The analysis results.
 
-If you want to force arm64 explicitly:
+5. `bot`:
+    - It uses an allow list of user `bot/allowlist.json` to restrict the usage of the bot. (`cp bot/allowlist.json.sample bot/allowlist.json` and edit it)
+    - `bot/config.json` is the configuration file for the bot. (`cp bot/config.json.sample bot/config.json` and edit it)
+    - It runs the existing local Docker analysis via `scripts/run_r2agent.sh`, and sends back the `Report.md` file when finished.
+    - Check the [bot/README.md](bot/README.md) file for more details.
 
-```bash
-docker build --platform=linux/arm64 -t r2agent:dev -f docker/Dockerfile .
-```
+## How it works
 
-## Run (interactive debug)
+The bot orchestrates the analysis workflow:
 
-```bash
-mkdir -p /tmp/r2job
-docker run --rm -it -v /tmp/r2job:/workspace r2agent:dev
-```
-
-## Debug the container with bash
-
-```bash
-mkdir -p /tmp/r2job
-docker run --rm -it -v /tmp/r2job:/workspace r2agent:dev bash
-```
-
-## Rebuild Docker container (useful if you make any changes)
-
-```bash
-docker build --platform linux/arm64 -t r2agent:dev -f docker/Dockerfile .
-```
-
-## Run (analysis)
-
-Use the helper script (recommended):
-
-```bash
-# Basic usage (uses default agent: agents/analyze.task.md)
-./scripts/run_r2agent.sh /path/to/binary
-
-# With a specific agent prompt
-./scripts/run_r2agent.sh /path/to/binary agents/crackme.task.md
-
-# With a tag (useful for organizing jobs)
-./scripts/run_r2agent.sh /path/to/binary agents/analyze.task.md "my_tag"
-
-# With a specific LLM model
-./scripts/run_r2agent.sh /path/to/binary agents/analyze.task.md "my_tag" opencode/grok-code
-
-# Full example: crackme analysis with custom tag and model
-./scripts/run_r2agent.sh ./crackme.bin agents/crackme.task.md "ctf_challenge_1" opencode/gpt-5-nano
-```
-
-**Available agents:**
-- `agents/analyze.task.md` - General security analysis focused on finding vulnerabilities (default)
-- `agents/crackme.task.md` - Specialized for CTF challenges and crackmes
-
-**Available LLM models (OpenCode Zen - free tier):**
-- `opencode/grok-code` - Fast and good for most tasks (default)
-- `opencode/big-pickle` - Alternative option with different characteristics
-- `opencode/gpt-5-nano` - Smaller but still capable
-
-Outputs are written under `./analysis/<job_id>/`.
-
-**Notes:**
-
-- The container expects the report at `/workspace/report.md`.
-- If an OpenCode run attempts to write `workspace/report.md` (relative path), the entrypoint script creates a small compatibility symlink so it still lands in `/workspace/report.md`.
+1. **User uploads binary** → Bot downloads it to `analysis/_uploads/`
+2. **Bot selects agent & LLM** → Uses user preferences (set via `/use` and `/llm` commands) or defaults
+3. **Bot calls runner** → Invokes `bot/runner_local.py` which executes `scripts/run_r2agent.sh`
+4. **Host script prepares job** → Creates job directory, copies binary and agent prompt file
+5. **Docker container runs** → Mounts job directory as `/workspace`, receives:
+   - **Agent prompt**: Via mounted file `/workspace/prompt_agent.md` (copied by host script)
+   - **LLM model**: Via environment variable `OPENCODE_MODEL` (set by host script)
+6. **Container executes** → `docker/run_analysis.sh` runs OpenCode with the agent prompt and LLM model
+7. **Results returned** → Bot sends `Report.md` back to the user via Telegram

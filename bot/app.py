@@ -47,6 +47,7 @@ from bot.runner_local import run_r2agent
 FREE_LLM_MODELS = (
     "opencode/gpt-5-nano",
     "opencode/big-pickle",
+    "opencode/glm-4.7-free",
     "opencode/grok-code",
 )
 DEFAULT_LLM_MODEL = "opencode/grok-code"
