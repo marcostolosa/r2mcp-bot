@@ -205,7 +205,7 @@ Status icons:
 - **Location**: In `bot/` directory
 - **Tables**:
   - `jobs`: Job metadata (job_id, user_id, agent, tag, status, created_at, finished_at, duration_s, runner_job_id, runner_job_dir, error)
-  - `user_settings`: User preferences (user_id, agent, llm_model)
+  - `user_prefs`: User preferences (user_id, agent, llm_model)
 - **Auto-created**: Schema initialized on bot startup
 
 ### Uploaded Files

@@ -2,7 +2,7 @@
 """
 Watchdog for r2agent analysis containers.
 
-This script scans Docker for containers launched by scripts/run_r2agent.sh
+This script scans Docker for containers launched by run_r2agent.sh
 (identified via label r2agent.managed=1). If a container has been running
 longer than TIMEOUT_SECONDS (default: 900 = 15 minutes), it is stopped and
 the action is logged under ./analysis/_watchdog_logs/.
