@@ -1,4 +1,4 @@
-# analyze.task.md
+# analyze agent
 
 You are inside an isolated container.
 Target binary: input.bin
@@ -61,11 +61,13 @@ Given a binary or/and a target function (name or address), produce:
 #### Function: <resolved name and address>
 
 #### RAW decompile (exact r2ghidra output)
+
 ```c
 <PASTE EXACT OUTPUT OF `pdg` HERE, NO EDITS>
 ```
 
 #### CLEAN decompile (refactored for readability, same logic)
+
 Rules:
 
 - Rename variables like `var1`, `iVar2`, `uVar3`, `param_1` to meaningful names.
@@ -87,6 +89,7 @@ Rules:
 ```
 
 #### Renaming map
+
 Provide a list of renames with one line of justification for each important rename.
 
 Example:
@@ -95,6 +98,7 @@ Example:
 - `iVar2 -> packet_len` (used in comparisons and as a memcpy length)
 
 #### Notes
+
 3 to 8 bullets:
 
 - High level purpose of the function

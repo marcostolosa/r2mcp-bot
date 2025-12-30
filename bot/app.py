@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import re
 import secrets
 import sys
 import shutil
@@ -16,10 +17,12 @@ if __name__ == "__main__" and (__package__ is None or __package__ == ""):
     repo_root = Path(__file__).resolve().parents[1]
     sys.path.insert(0, str(repo_root))
 
-from telegram import Update
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.constants import ChatAction
+from telegram.error import BadRequest
 from telegram.ext import (
     Application,
+    CallbackQueryHandler,
     CommandHandler,
     ContextTypes,
     MessageHandler,
@@ -65,6 +68,22 @@ def utc_now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
+def redact_paths(text: str) -> str:
+    """Redact file system paths from text to avoid exposing server directory structure."""
+    # Match Unix-like paths (absolute paths with / separators)
+    # Match Windows paths (C:\path\to\file or \\server\share\path)
+    # Match relative paths (path/to/file)
+    patterns = [
+        r"\/[a-zA-Z0-9_\-\.\~\/]+[a-zA-Z0-9_\-\.]+",  # /path/to/file (Unix absolute)
+        r"[a-zA-Z]:\\[a-zA-Z0-9_\-\.\\]+[a-zA-Z0-9_\-\.]+",  # C:\path\to\file (Windows absolute)
+        r"\\\\[a-zA-Z0-9_\-\.\\]+[a-zA-Z0-9_\-\.\\]+",  # \\server\share\path (Windows UNC)
+        r"[a-zA-Z0-9_\-\.]+\/[a-zA-Z0-9_\-\.\/]+[a-zA-Z0-9_\-\.]+",  # relative/path/to/file
+    ]
+    for pattern in patterns:
+        text = re.sub(pattern, "<redacted path>", text)
+    return text
+
+
 def require_allowed(allowlist: Allowlist):
     async def _guard(update: Update, context: ContextTypes.DEFAULT_TYPE) -> bool:
         user = update.effective_user
@@ -79,16 +98,143 @@ def require_allowed(allowlist: Allowlist):
     return _guard
 
 
-async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    await update.message.reply_text(
-        "🤖 Send me a binary as a document and I'll analyze it.\n\n"
-        "Commands:\n"
-        "/agents - list available agent prompts\n"
-        "/read <agent_filename> - send the agent prompt file\n"
-        "/use <agent_filename> - select agent prompt\n"
-        "/llm - list/select the OpenCode model\n"
-        "/status - show your recent jobs\n"
+def build_main_menu() -> InlineKeyboardMarkup:
+    """Build the main menu inline keyboard."""
+    keyboard = [
+        [
+            InlineKeyboardButton("📄 Select Agent", callback_data="menu:agent"),
+            InlineKeyboardButton("🧠 Select Model", callback_data="menu:llm"),
+        ],
+        [
+            InlineKeyboardButton("📊 Job Status", callback_data="menu:status"),
+            InlineKeyboardButton(
+                "📥 Download Agents", callback_data="menu:agents_list"
+            ),
+        ],
+        [
+            InlineKeyboardButton("ℹ️ Help", callback_data="menu:help"),
+        ],
+    ]
+    return InlineKeyboardMarkup(keyboard)
+
+
+def build_agent_menu(
+    cfg: BotConfig, conn, user_id: int
+) -> tuple[str, InlineKeyboardMarkup]:
+    """Build the agent selection menu with current agent info."""
+    agents_dir = (cfg.project_root / "agents").resolve()
+    files = (
+        sorted([p.name for p in agents_dir.iterdir() if p.is_file()])
+        if agents_dir.exists()
+        else []
     )
+
+    current_pref = get_user_agent(conn, user_id)
+    current_path = Path(current_pref).resolve() if current_pref else cfg.default_agent
+    current_name = current_path.name
+
+    # Build message text
+    lines = [
+        "📄 Select Agent Prompt",
+        "",
+        f"✨ Current: {current_name} ⭐"
+        if current_path == cfg.default_agent.resolve()
+        else f"✨ Current: {current_name}",
+        "",
+        "Available agents:",
+    ]
+
+    # Build keyboard buttons
+    keyboard = []
+    for idx, name in enumerate(files, start=1):
+        agent_path = (agents_dir / name).resolve()
+        is_default = agent_path == cfg.default_agent.resolve()
+        is_selected = name == current_name
+
+        # Button label with emojis
+        label_parts = []
+        # Add number emoji
+        number_emojis = ["1️⃣", "2️⃣", "3️⃣", "4️⃣", "5️⃣", "6️⃣", "7️⃣", "8️⃣", "9️⃣", "🔟"]
+        if idx <= len(number_emojis):
+            label_parts.append(number_emojis[idx - 1])
+        else:
+            label_parts.append(f"{idx}.")
+
+        label_parts.append(name)
+        if is_default:
+            label_parts.append("⭐")
+        if is_selected:
+            label_parts.append("✅")
+
+        label = " ".join(label_parts)
+        keyboard.append(
+            [InlineKeyboardButton(label, callback_data=f"agent:select:{name}")]
+        )
+
+    # Add back button
+    keyboard.append(
+        [InlineKeyboardButton("🔙 Back to Menu", callback_data="menu:main")]
+    )
+
+    return "\n".join(lines), InlineKeyboardMarkup(keyboard)
+
+
+def build_llm_menu(conn, user_id: int) -> tuple[str, InlineKeyboardMarkup]:
+    """Build the LLM model selection menu with current model info."""
+    current = get_user_llm_model(conn, user_id) or DEFAULT_LLM_MODEL
+
+    # Build message text
+    lines = [
+        "🧠 Select LLM Model",
+        "",
+        f"✨ Current: {current} ⭐"
+        if current == DEFAULT_LLM_MODEL
+        else f"✨ Current: {current}",
+        "",
+        "Free models:",
+    ]
+
+    # Build keyboard buttons
+    keyboard = []
+    number_emojis = ["1️⃣", "2️⃣", "3️⃣", "4️⃣", "5️⃣", "6️⃣", "7️⃣", "8️⃣", "9️⃣", "🔟"]
+
+    for idx, model in enumerate(FREE_LLM_MODELS, start=1):
+        is_default = model == DEFAULT_LLM_MODEL
+        is_selected = model == current
+
+        # Button label with emojis
+        label_parts = []
+        if idx <= len(number_emojis):
+            label_parts.append(number_emojis[idx - 1])
+        else:
+            label_parts.append(f"{idx}.")
+
+        label_parts.append(model)
+        if is_default:
+            label_parts.append("⭐")
+        if is_selected:
+            label_parts.append("✅")
+
+        label = " ".join(label_parts)
+        keyboard.append(
+            [InlineKeyboardButton(label, callback_data=f"llm:select:{model}")]
+        )
+
+    # Add back button
+    keyboard.append(
+        [InlineKeyboardButton("🔙 Back to Menu", callback_data="menu:main")]
+    )
+
+    return "\n".join(lines), InlineKeyboardMarkup(keyboard)
+
+
+async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    welcome_text = (
+        "🤖 Welcome to r2agent Bot!\n\n"
+        "Send me a binary as a document and I'll analyze it.\n\n"
+        "Choose an option from the menu below:"
+    )
+    await update.message.reply_text(welcome_text, reply_markup=build_main_menu())
 
 
 async def cmd_agents(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -171,28 +317,16 @@ async def cmd_use(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         return None
 
     if not context.args:
-        lines = [
-            f"📄 Current agent: {current_name}",
-            "",
-            "Available agents:",
-        ]
-        for idx, name in enumerate(files, start=1):
-            agent_path = (agents_dir / name).resolve()
-            is_default = agent_path == cfg.default_agent.resolve()
-            mark_default = " ⭐" if is_default else ""
-            here = " (selected)" if name == current_name else ""
-            lines.append(f"{idx}. {name}{mark_default}{here}")
-        lines += [
-            "",
-            "Set it with:",
-            "/use 1  (or /use crackme.task.md)",
-        ]
-        await update.message.reply_text("\n".join(lines))
+        # Show inline menu instead of text list
+        text, keyboard = build_agent_menu(cfg, conn, user.id)
+        await update.message.reply_text(text, reply_markup=keyboard)
         return
 
     chosen_name = normalize_agent(context.args[0])
     if chosen_name is None:
-        await update.message.reply_text("❌ Invalid agent. Use /use to see available agents.")
+        await update.message.reply_text(
+            "❌ Invalid agent. Use /use to see available agents."
+        )
         return
 
     agent_path = (agents_dir / chosen_name).resolve()
@@ -238,21 +372,9 @@ async def cmd_llm(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     current = get_user_llm_model(conn, user.id) or DEFAULT_LLM_MODEL
 
     if not context.args:
-        lines = [
-            f"🧠 Current model: {current}",
-            "",
-            "Free models:",
-        ]
-        for idx, m in enumerate(FREE_LLM_MODELS, start=1):
-            mark = " ⭐" if m == DEFAULT_LLM_MODEL else ""
-            here = " (selected)" if m == current else ""
-            lines.append(f"{idx}. {m}{mark}{here}")
-        lines += [
-            "",
-            "Set it with:",
-            "/llm 1  (or /llm opencode/gpt-5-nano)",
-        ]
-        await update.message.reply_text("\n".join(lines))
+        # Show inline menu instead of text list
+        text, keyboard = build_llm_menu(conn, user.id)
+        await update.message.reply_text(text, reply_markup=keyboard)
         return
 
     chosen = _normalize_llm_model(context.args[0])
@@ -275,14 +397,231 @@ async def cmd_status(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
     if not jobs:
         await update.message.reply_text("🗂️ No jobs yet.")
         return
-    lines = []
+
+    lines = ["📌 Recent Jobs:", ""]
     icon = {"queued": "⏳", "running": "🟡", "finished": "✅", "failed": "❌"}
+
     for j in jobs:
+        job_icon = icon.get(j.status, "•")
         dur = f"{j.duration_s}s" if j.duration_s is not None else "-"
-        lines.append(
-            f"{icon.get(j.status, '•')} {j.job_id} | {j.status} | {dur} | {Path(j.agent).name}"
+        agent_name = Path(j.agent).name
+
+        lines.append(f"{job_icon} {j.job_id}")
+        lines.append(f"   └─ 📊 Status: {j.status}")
+        lines.append(f"   └─ ⏱️  Total time: {dur}")
+        lines.append(f"   └─ 📄 Prompt agent: {agent_name}")
+        lines.append("")  # Empty line between jobs
+
+    await update.message.reply_text("\n".join(lines))
+
+
+async def safe_edit_message_text(query, text: str, reply_markup=None) -> None:
+    """Safely edit message text, ignoring BadRequest if message is unchanged."""
+    try:
+        await query.edit_message_text(text, reply_markup=reply_markup)
+    except BadRequest as e:
+        # Ignore "Message is not modified" error - it means the message is already in the desired state
+        if "Message is not modified" not in str(e):
+            raise
+
+
+async def handle_callback_query(
+    update: Update, context: ContextTypes.DEFAULT_TYPE
+) -> None:
+    """Handle callback queries from inline keyboard buttons."""
+    query = update.callback_query
+    if query is None:
+        return
+
+    await query.answer()  # Acknowledge the callback
+
+    cfg: BotConfig = context.application.bot_data["cfg"]
+    conn = context.application.bot_data["db"]
+    user = update.effective_user
+    if user is None:
+        return
+
+    callback_data = query.data
+
+    if callback_data == "menu:main":
+        # Show main menu
+        welcome_text = (
+            "🤖 Welcome to r2agent Bot!\n\n"
+            "Send me a binary as a document and I'll analyze it.\n\n"
+            "Choose an option from the menu below:"
         )
-    await update.message.reply_text("📌 Recent jobs:\n" + "\n".join(lines))
+        await safe_edit_message_text(
+            query, welcome_text, reply_markup=build_main_menu()
+        )
+
+    elif callback_data == "menu:agent":
+        # Show agent selection menu
+        text, keyboard = build_agent_menu(cfg, conn, user.id)
+        await safe_edit_message_text(query, text, reply_markup=keyboard)
+
+    elif callback_data == "menu:llm":
+        # Show LLM model selection menu
+        text, keyboard = build_llm_menu(conn, user.id)
+        await safe_edit_message_text(query, text, reply_markup=keyboard)
+
+    elif callback_data == "menu:status":
+        # Show job status
+        jobs = list_jobs_for_user(conn, user.id, limit=10)
+        if not jobs:
+            await safe_edit_message_text(
+                query, "🗂️ No jobs yet.", reply_markup=build_main_menu()
+            )
+            return
+
+        lines = ["📌 Recent Jobs:", ""]
+        icon = {"queued": "⏳", "running": "🟡", "finished": "✅", "failed": "❌"}
+
+        for j in jobs:
+            job_icon = icon.get(j.status, "•")
+            dur = f"{j.duration_s}s" if j.duration_s is not None else "-"
+            agent_name = Path(j.agent).name
+
+            lines.append(f"{job_icon} {j.job_id}")
+            lines.append(f"   └─ 📊 Status: {j.status}")
+            lines.append(f"   └─ ⏱️  Total time: {dur}")
+            lines.append(f"   └─ 📄 Prompt agent: {agent_name}")
+            lines.append("")
+
+        # Add back button
+        keyboard = InlineKeyboardMarkup(
+            [[InlineKeyboardButton("🔙 Back to Menu", callback_data="menu:main")]]
+        )
+        await safe_edit_message_text(query, "\n".join(lines), reply_markup=keyboard)
+
+    elif callback_data == "menu:agents_list":
+        # Show agents as downloadable buttons
+        agents_dir = (cfg.project_root / "agents").resolve()
+        if not agents_dir.exists():
+            await safe_edit_message_text(
+                query, "❌ No agents directory found.", reply_markup=build_main_menu()
+            )
+            return
+        files = sorted([p.name for p in agents_dir.iterdir() if p.is_file()])
+        if not files:
+            await safe_edit_message_text(
+                query, "❌ No agent prompts found.", reply_markup=build_main_menu()
+            )
+            return
+
+        text = "📥 Download Agent Prompts\n\nClick on an agent to download it:"
+
+        # Build keyboard with buttons for each agent
+        keyboard = []
+        for agent_name in files:
+            # Use callback instead of text to avoid Telegram opening browser for .md files
+            keyboard.append(
+                [
+                    InlineKeyboardButton(
+                        f"📄 {agent_name}", callback_data=f"agent:download:{agent_name}"
+                    )
+                ]
+            )
+
+        # Add back button
+        keyboard.append(
+            [InlineKeyboardButton("🔙 Back to Menu", callback_data="menu:main")]
+        )
+
+        await safe_edit_message_text(
+            query, text, reply_markup=InlineKeyboardMarkup(keyboard)
+        )
+
+    elif callback_data == "menu:help":
+        # Show help
+        help_text = (
+            "ℹ️ Help\n\n"
+            "Commands:\n"
+            "/start - Show main menu\n"
+            "/agents - List available agent prompts\n"
+            "/read <agent_filename> - Send the agent prompt file\n"
+            "/use <agent_filename> - Select agent prompt\n"
+            "/llm - List/select the OpenCode model\n"
+            "/status - Show your recent jobs\n\n"
+            "Or use the menu buttons above! 👆"
+        )
+        keyboard = InlineKeyboardMarkup(
+            [[InlineKeyboardButton("🔙 Back to Menu", callback_data="menu:main")]]
+        )
+        await safe_edit_message_text(query, help_text, reply_markup=keyboard)
+
+    elif callback_data.startswith("agent:select:"):
+        # Handle agent selection
+        agent_name = callback_data.replace("agent:select:", "")
+        agents_dir = (cfg.project_root / "agents").resolve()
+        agent_path = (agents_dir / agent_name).resolve()
+
+        # Prevent path traversal
+        try:
+            agent_path.relative_to(agents_dir)
+        except Exception:
+            await query.answer("❌ Invalid agent path.", show_alert=True)
+            return
+
+        if not agent_path.exists() or not agent_path.is_file():
+            await query.answer(f"❌ Agent not found: {agent_name}", show_alert=True)
+            return
+
+        set_user_agent(conn, user.id, str(agent_path))
+        await query.answer(f"✅ Selected agent: {agent_name}")
+
+        # Update menu to show selection
+        text, keyboard = build_agent_menu(cfg, conn, user.id)
+        await safe_edit_message_text(query, text, reply_markup=keyboard)
+
+    elif callback_data.startswith("llm:select:"):
+        # Handle LLM model selection
+        model_name = callback_data.replace("llm:select:", "")
+
+        if model_name not in FREE_LLM_MODELS:
+            # Try short name
+            normalized = _normalize_llm_model(model_name)
+            if normalized is None:
+                await query.answer("❌ Invalid model.", show_alert=True)
+                return
+            model_name = normalized
+
+        set_user_llm_model(
+            conn, user.id, model_name, default_agent=str(cfg.default_agent)
+        )
+        await query.answer(f"✅ Model set to: {model_name}")
+
+        # Update menu to show selection
+        text, keyboard = build_llm_menu(conn, user.id)
+        await safe_edit_message_text(query, text, reply_markup=keyboard)
+
+    elif callback_data.startswith("agent:download:"):
+        # Handle agent download
+        agent_name = callback_data.replace("agent:download:", "")
+        agents_dir = (cfg.project_root / "agents").resolve()
+        agent_path = (agents_dir / agent_name).resolve()
+
+        # Prevent path traversal
+        try:
+            agent_path.relative_to(agents_dir)
+        except Exception:
+            await query.answer("❌ Invalid agent path.", show_alert=True)
+            return
+
+        if not agent_path.exists() or not agent_path.is_file():
+            await query.answer(f"❌ Agent not found: {agent_name}", show_alert=True)
+            return
+
+        # Send the agent file as document
+        await query.answer(f"📥 Downloading {agent_name}...")
+        try:
+            with agent_path.open("rb") as f:
+                await query.message.reply_document(
+                    document=f,
+                    filename=agent_path.name,
+                    caption=f"📄 {agent_path.name}",
+                )
+        except Exception as e:
+            await query.answer(f"❌ Error downloading file: {e}", show_alert=True)
 
 
 async def handle_document(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -359,13 +698,71 @@ async def worker_loop(app: Application) -> None:
                 log_path=runner_log,
                 llm_model=llm_model,
             )
+
+            # Verify job_dir exists and is accessible
+            if not result.job_dir.exists():
+                raise RuntimeError(
+                    f"Job directory does not exist: {result.job_id}\n"
+                    f"Exit code: {result.exit_code}"
+                )
+
+            if not result.job_dir.is_dir():
+                raise RuntimeError(
+                    f"Job directory path is not a directory: {result.job_id}\n"
+                    f"Exit code: {result.exit_code}"
+                )
+
+            # Check exit code before looking for report
+            if result.exit_code != 0:
+                # Read log for error details
+                error_details = ""
+                if runner_log.exists():
+                    try:
+                        log_content = runner_log.read_text(
+                            encoding="utf-8", errors="replace"
+                        )
+                        log_lines = log_content.strip().split("\n")
+                        if log_lines:
+                            # Redact paths from log lines before sending
+                            error_details = redact_paths(
+                                "\n".join(log_lines[-15:])
+                            )  # Last 15 lines
+                    except Exception:
+                        pass
+
+                error_msg = (
+                    f"Analysis failed with exit code {result.exit_code}.\n"
+                    f"Job ID: {result.job_id}"
+                )
+                if error_details:
+                    error_msg += f"\n\nLast log lines:\n{error_details}"
+
+                raise RuntimeError(error_msg)
+
+            # Now check for report file
             report_path = result.job_dir / "Report.md"
             if not report_path.exists():
                 alt = result.job_dir / "report.md"
                 if alt.exists():
                     report_path = alt
                 else:
-                    raise FileNotFoundError(f"Missing report file in job dir: {result.job_dir}")
+                    # List what files ARE in the directory for debugging
+                    existing_files = []
+                    try:
+                        existing_files = [f.name for f in result.job_dir.iterdir()]
+                    except Exception:
+                        pass
+
+                    error_msg = (
+                        f"Missing report file in job directory: {result.job_id}\n"
+                        f"Exit code: {result.exit_code}"
+                    )
+                    if existing_files:
+                        error_msg += f"\nFiles found: {', '.join(existing_files)}"
+                    else:
+                        error_msg += "\nDirectory appears to be empty"
+
+                    raise FileNotFoundError(error_msg)
 
             duration_s = int(time.time() - started)
             mark_finished(
@@ -388,17 +785,53 @@ async def worker_loop(app: Application) -> None:
             )
         except Exception as e:
             duration_s = int(time.time() - started)
+
+            # Try to get more context from logs if available
+            # Redact paths from the exception message itself
+            error_msg = redact_paths(str(e))
+            if runner_log.exists():
+                try:
+                    log_content = runner_log.read_text(
+                        encoding="utf-8", errors="replace"
+                    )
+                    log_lines = log_content.strip().split("\n")
+                    if log_lines:
+                        # Get last few error lines and redact paths
+                        last_lines = redact_paths("\n".join(log_lines[-10:]))
+                        if last_lines:
+                            error_msg += (
+                                f"\n\n📋 Last log lines:\n```\n{last_lines}\n```"
+                            )
+                except Exception:
+                    pass
+
+            # Try to get job_dir from result if available (for better error reporting)
+            runner_job_id = None
+            runner_job_dir = None
+            try:
+                if "result" in locals():
+                    runner_job_id = result.job_id
+                    runner_job_dir = str(result.job_dir)
+            except Exception:
+                pass
+
             mark_failed(
                 conn,
                 job_id,
                 finished_at=utc_now_iso(),
                 duration_s=duration_s,
-                runner_job_id=None,
-                runner_job_dir=None,
+                runner_job_id=runner_job_id,
+                runner_job_dir=runner_job_dir,
                 error=str(e),
             )
+
+            # Truncate error message if too long for Telegram (max 4096 chars)
+            if len(error_msg) > 4000:
+                error_msg = error_msg[:3900] + "\n\n... (truncated)"
+
             await app.bot.send_message(
-                chat_id=req.chat_id, text=f"❌ Job failed after {duration_s}s: {e}"
+                chat_id=req.chat_id,
+                text=f"❌ Job failed after {duration_s}s:\n\n{error_msg}",
             )
         finally:
             queue.task_done()
@@ -433,6 +866,7 @@ def build_app() -> Application:
     app.add_handler(CommandHandler("use", wrap(cmd_use)))
     app.add_handler(CommandHandler("llm", wrap(cmd_llm)))
     app.add_handler(CommandHandler("status", wrap(cmd_status)))
+    app.add_handler(CallbackQueryHandler(handle_callback_query))
     app.add_handler(MessageHandler(filters.Document.ALL, wrap(handle_document)))
 
     async def _post_init(application: Application) -> None:
@@ -447,5 +881,3 @@ def build_app() -> Application:
 if __name__ == "__main__":
     application = build_app()
     application.run_polling()
-
-

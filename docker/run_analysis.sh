@@ -7,7 +7,7 @@
 #
 # Parameter passing mechanism:
 # - Agent prompt: Received via mounted file at /workspace/prompt_agent.md
-#   The host script (scripts/run_r2agent.sh) copies the agent file into the job directory
+#   The host script (run_r2agent.sh) copies the agent file into the job directory
 #   before mounting it as /workspace. If no agent is provided, a template is copied from
 #   /opt/prompt_agent.md (see lines 32-35).
 # - LLM model: Received via environment variable OPENCODE_MODEL
@@ -26,18 +26,16 @@ LOG_FILE="${WORKDIR}/opencode.log"
 
 cd "${WORKDIR}"
 
-# Compatibility shim:
+# Create workspace directory (needed for compatibility)
 # Some OpenCode runs may try to write a relative path like "workspace/report.md"
 # (missing the leading slash). Since we run from /workspace, that becomes
-# "/workspace/workspace/report.md". Make that resolve to "/workspace/report.md".
+# "/workspace/workspace/report.md". We'll handle symlinks after checking where
+# the report was actually created.
 #
 # Important: /workspace is a host-mounted directory. Avoid creating absolute symlinks
 # like "workspace -> /workspace" because they become broken on the host and can
 # break post-processing (e.g., zipping job artifacts).
 mkdir -p "${WORKDIR}/workspace"
-ln -sf ../Report.md "${WORKDIR}/workspace/report.md"
-# Compatibility for older tooling expecting /workspace/report.md
-ln -sf "${REPORT_FILE##*/}" "${WORKDIR}/report.md"
 
 if [[ ! -f "${TASK_FILE}" ]]; then
   echo "[i] No prompt_agent.md found in ${WORKDIR}, copying template..."
@@ -69,7 +67,7 @@ rm -f "${REPORT_FILE}" "${LOG_FILE}"
 echo "[+] Running OpenCode, logging to ${LOG_FILE} ..."
 
 # LLM model selection: Read from OPENCODE_MODEL environment variable (set by host script).
-# This allows the caller (scripts/run_r2agent.sh or bot) to specify which OpenCode model
+# This allows the caller (run_r2agent.sh or bot) to specify which OpenCode model
 # to use for analysis. Defaults to "opencode/grok-code" if not provided.
 OPENCODE_MODEL="${OPENCODE_MODEL:-opencode/grok-code}"
 echo "[i] OpenCode model: ${OPENCODE_MODEL}"
@@ -102,22 +100,29 @@ if [[ ${OC_RC} -ne 0 ]]; then
   echo "    See: ${LOG_FILE}"
 fi
 
-if [[ ! -f "${REPORT_FILE}" ]]; then
+# Compatibility shim: create symlinks AFTER checking where report was created
+# Some OpenCode runs may write to workspace/report.md (relative path)
+ALT_REPORT_1="${WORKDIR}/workspace/report.md"
+ALT_REPORT_2="${WORKDIR}/report.md"
+
+if [[ -f "${REPORT_FILE}" ]]; then
+  # Report.md exists in expected location, create symlinks for compatibility
+  ln -sf ../Report.md "${ALT_REPORT_1}" 2>/dev/null || true
+  ln -sf "${REPORT_FILE##*/}" "${ALT_REPORT_2}" 2>/dev/null || true
+elif [[ -f "${ALT_REPORT_1}" ]]; then
+  # OpenCode wrote to workspace/report.md, copy to Report.md and create symlink
+  echo "[i] Found report at ${ALT_REPORT_1}, copying to ${REPORT_FILE}"
+  cp -f "${ALT_REPORT_1}" "${REPORT_FILE}"
+  ln -sf "${REPORT_FILE##*/}" "${ALT_REPORT_2}" 2>/dev/null || true
+elif [[ -f "${ALT_REPORT_2}" ]]; then
+  # OpenCode wrote to report.md, copy to Report.md and create symlink
+  echo "[i] Found report at ${ALT_REPORT_2}, copying to ${REPORT_FILE}"
+  cp -f "${ALT_REPORT_2}" "${REPORT_FILE}"
+  ln -sf ../Report.md "${ALT_REPORT_1}" 2>/dev/null || true
+else
   echo "[!] report.md was not created at ${REPORT_FILE}"
   echo "    See: ${LOG_FILE}"
-
-  # Fallback: try common alternate locations (observed in logs)
-  ALT_REPORT_1="${WORKDIR}/workspace/report.md"
-  ALT_REPORT_2="${WORKDIR}/report.md"
-  if [[ -f "${ALT_REPORT_1}" ]]; then
-    echo "[i] Found report at ${ALT_REPORT_1}, copying to ${REPORT_FILE}"
-    cp -f "${ALT_REPORT_1}" "${REPORT_FILE}"
-  elif [[ -f "${ALT_REPORT_2}" ]]; then
-    echo "[i] Found report at ${ALT_REPORT_2}, copying to ${REPORT_FILE}"
-    cp -f "${ALT_REPORT_2}" "${REPORT_FILE}"
-  fi
-
-  [[ -f "${REPORT_FILE}" ]] || exit 2
+  exit 2
 fi
 
 echo "[+] Done. Report written to ${REPORT_FILE}"

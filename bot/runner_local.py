@@ -27,25 +27,27 @@ async def run_r2agent(
     log_path: Path,
     llm_model: Optional[str] = None,
 ) -> RunResult:
-    script_path = (project_root / "scripts" / "run_r2agent.sh").resolve()
+    script_path = (project_root / "run_r2agent.sh").resolve()
     if not script_path.exists():
         raise FileNotFoundError(f"Missing script: {script_path}")
 
-    args = [str(script_path), str(binary_path)]
+    # Build arguments using flag-based API (required by run_r2agent.sh)
+    # Bot always uses docker mode
+    args = [
+        str(script_path),
+        "--mode", "docker", # I would not change this to local.
+        "--file", str(binary_path),
+    ]
+    
+    # Agent prompt is required if no prompt text is provided
     if agent_prompt_path is not None:
-        args.append(str(agent_prompt_path))
+        args.extend(["--agent", str(agent_prompt_path)])
+    
+    # Optional flags
     if tag:
-        # Maintain positional args: if no agent prompt is passed, we still need an empty 2nd arg
-        if agent_prompt_path is None:
-            args.append("")
-        args.append(tag)
+        args.extend(["--tag", tag])
     if llm_model:
-        # Maintain positional args: if no tag is passed, we still need an empty 3rd arg.
-        if not tag:
-            if agent_prompt_path is None:
-                args.append("")
-            args.append("")
-        args.append(llm_model)
+        args.extend(["--model", llm_model])
 
     log_path.parent.mkdir(parents=True, exist_ok=True)
 

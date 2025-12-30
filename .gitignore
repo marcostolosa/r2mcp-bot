@@ -34,3 +34,5 @@ analysis/_watchdog_logs/*
 bot/config.json
 bot/allowlist.json
 
+.ruff_cache/
+
